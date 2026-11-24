@@ -1,0 +1,70 @@
+# 03 · 指标口径字典（语义层唯一事实来源）
+# 修改口径必须同步更新 Golden Set 中受影响的标准答案。
+version: 0.1
+dataset: olist
+time_field_default: orders.order_purchase_timestamp
+
+tables:
+  orders: { source: olist_orders_dataset, grain: 一行一个订单, key: order_id }
+  order_items: { source: olist_order_items_dataset, grain: 一行一个订单商品, key: [order_id, order_item_id] }
+  payments: { source: olist_order_payments_dataset, grain: 一行一笔支付, key: [order_id, payment_sequential] }
+  reviews: { source: olist_order_reviews_dataset, grain: 一行一条评价, key: review_id }
+  customers: { source: olist_customers_dataset, key: customer_id, note: "customer_unique_id 才是真实用户；customer_id 每单不同" }
+  products: { source: olist_products_dataset, key: product_id }
+  sellers: { source: olist_sellers_dataset, key: seller_id }
+  geolocation: { source: olist_geolocation_dataset, note: 邮编前缀非唯一，关联前需去重 }
+  category_translation: { source: product_category_name_translation }
+
+global_filters:
+  valid_order: "orders.order_status NOT IN ('canceled', 'unavailable')"
+
+metrics:
+  gmv:
+    aliases: [GMV, 成交额, 销售额, 商品交易总额]
+    definition: 有效订单的商品金额之和（不含运费）
+    formula: "SUM(order_items.price)"
+    filters: [valid_order]
+  gmv_with_freight:
+    aliases: [含运费成交额]
+    formula: "SUM(order_items.price + order_items.freight_value)"
+    filters: [valid_order]
+  order_count:
+    aliases: [订单量, 订单数]
+    formula: "COUNT(DISTINCT orders.order_id)"
+    filters: [valid_order]
+  aov:
+    aliases: [客单价, 平均订单金额]
+    formula: "gmv / order_count"
+  buyer_count:
+    aliases: [买家数, 下单用户数]
+    formula: "COUNT(DISTINCT customers.customer_unique_id)"
+    filters: [valid_order]
+  repurchase_rate:
+    aliases: [复购率]
+    definition: 统计周期内下单 ≥2 次的用户占下单用户比例
+    formula: "COUNT(user WHERE orders>=2) / COUNT(user)"
+    grain: customers.customer_unique_id
+  delivery_days:
+    aliases: [履约时效, 配送时长]
+    formula: "AVG(order_delivered_customer_date - order_purchase_timestamp) 以天计"
+    filters: ["order_status = 'delivered'"]
+  late_delivery_rate:
+    aliases: [延迟交付率, 逾期率]
+    formula: "COUNT(order_delivered_customer_date > order_estimated_delivery_date) / COUNT(delivered)"
+  avg_review_score:
+    aliases: [平均评分, 好评度]
+    formula: "AVG(reviews.review_score)"
+  bad_review_rate:
+    aliases: [差评率]
+    formula: "COUNT(review_score <= 2) / COUNT(*)"
+
+dimensions:
+  customer_state: { aliases: [州, 地区, 省份], column: customers.customer_state }
+  seller_state: { aliases: [卖家州], column: sellers.seller_state }
+  category: { aliases: [品类, 类目], column: category_translation.product_category_name_english }
+  payment_type: { aliases: [支付方式], column: payments.payment_type }
+  month: { aliases: [月份], expr: "DATE_TRUNC('month', orders.order_purchase_timestamp)" }
+
+known_pitfalls:
+  - 一单多商品：order_items 与 payments 直接 JOIN 会导致金额重复放大，需先各自聚合到订单粒度。
+  - 2016 年及 2018-09 之后数据稀疏，趋势分析默认区间 2017-01 ~ 2018-08。
