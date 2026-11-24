@@ -1,70 +1,418 @@
-# 03 · 指标口径字典（语义层唯一事实来源）
-# 修改口径必须同步更新 Golden Set 中受影响的标准答案。
-version: 0.1
+# 03 · 指标口径字典与维度兼容矩阵（v0.2）
+# 语义层唯一事实来源（Single Source of Truth）
+# 规范：
+# 1. 所有 sql_template 均基于清洗后的 schema `olist_clean`，必须可由 `scripts/validate_glossary.py` 直接执行验证。
+# 2. 修改任何口径定义，必须同步更新 Golden Set 中关联题目的标准答案。
+
+version: "0.2"
 dataset: olist
-time_field_default: orders.order_purchase_timestamp
+default_schema: olist_clean
+timezone_policy: "TIMESTAMP WITHOUT TIME ZONE（保持 Olist 原始巴西圣保罗本地时间，不做 UTC 转换；按月聚合统一使用 DATE_TRUNC('month', order_purchase_timestamp)）"
+recommended_analysis_window:
+  start: "2017-01-01"
+  end: "2018-08-31"
+  sparse_periods_note: "2016-09~2016-12 处于起步期样本极少；2018-09~2018-10 几乎仅有少量订单，趋势与环比分析默认排除并在命中时触发提醒。"
 
 tables:
-  orders: { source: olist_orders_dataset, grain: 一行一个订单, key: order_id }
-  order_items: { source: olist_order_items_dataset, grain: 一行一个订单商品, key: [order_id, order_item_id] }
-  payments: { source: olist_order_payments_dataset, grain: 一行一笔支付, key: [order_id, payment_sequential] }
-  reviews: { source: olist_order_reviews_dataset, grain: 一行一条评价, key: review_id }
-  customers: { source: olist_customers_dataset, key: customer_id, note: "customer_unique_id 才是真实用户；customer_id 每单不同" }
-  products: { source: olist_products_dataset, key: product_id }
-  sellers: { source: olist_sellers_dataset, key: seller_id }
-  geolocation: { source: olist_geolocation_dataset, note: 邮编前缀非唯一，关联前需去重 }
-  category_translation: { source: product_category_name_translation }
+  orders:
+    raw_source: olist_raw.olist_orders_dataset
+    clean_target: olist_clean.orders
+    grain: "一行一个订单 (1 row per order_id)"
+    primary_key: [order_id]
+    time_columns:
+      - order_purchase_timestamp
+      - order_approved_at
+      - order_delivered_carrier_date
+      - order_delivered_customer_date
+      - order_estimated_delivery_date
+  order_items:
+    raw_source: olist_raw.olist_order_items_dataset
+    clean_target: olist_clean.order_items
+    grain: "一行一个订单商品项 (1 row per order_id + order_item_id)"
+    primary_key: [order_id, order_item_id]
+  payments:
+    raw_source: olist_raw.olist_order_payments_dataset
+    clean_target: olist_clean.payments
+    grain: "一行一笔订单支付流水 (一单可能混合信用卡+代金券多笔支付)"
+    primary_key: [order_id, payment_sequential]
+  reviews:
+    raw_source: olist_raw.olist_order_reviews_dataset
+    clean_target: olist_clean.reviews
+    raw_key_note: "原始表 review_id 不唯一（存在 ~800+ 重复及一单多评），联合键为 (review_id, order_id)"
+    clean_dedup_rule: "olist_clean.reviews 已按 order_id 去重（DISTINCT ON (order_id) ORDER BY order_id, review_creation_date DESC, review_answer_timestamp DESC NULLS LAST），保证一行对应一个订单的最新评价；原始全量保留在 olist_clean.order_reviews_all"
+    grain: "一行一个订单的最新评价 (1 row per order_id)"
+    primary_key: [order_id]
+  customers:
+    raw_source: olist_raw.olist_customers_dataset
+    clean_target: olist_clean.customers
+    grain: "一行一个订单级客户映射 ID"
+    primary_key: [customer_id]
+    note: "customer_id 每笔订单都会重新生成；统计真实买家与复购必须使用 customer_unique_id！"
+  products:
+    raw_source: olist_raw.olist_products_dataset
+    clean_target: olist_clean.products
+    grain: "一行一个商品"
+    primary_key: [product_id]
+    schema_fix_note: "原始表存在拼写错误 product_name_lenght / product_description_lenght，且 ~610 行品类为 NULL；olist_clean.products 已修正列名为 product_name_length / product_description_length，并预关联英文品类生成 category_en = COALESCE(t.product_category_name_english, p.product_category_name, 'uncategorized')"
+  sellers:
+    raw_source: olist_raw.olist_sellers_dataset
+    clean_target: olist_clean.sellers
+    grain: "一行一个卖家"
+    primary_key: [seller_id]
+  geolocation_zip_prefix:
+    raw_source: olist_raw.olist_geolocation_dataset
+    clean_target: olist_clean.geolocation_zip_prefix
+    grain: "一行一个 5 位邮编前缀（聚合经纬度均值与州/城市众数，防止原始表直接 JOIN 膨胀）"
+    primary_key: [zip_code_prefix]
+  category_translation:
+    raw_source: olist_raw.product_category_name_translation
+    clean_target: olist_clean.category_translation
+    grain: "一行一个葡语到英语品类映射"
+    primary_key: [product_category_name]
 
 global_filters:
-  valid_order: "orders.order_status NOT IN ('canceled', 'unavailable')"
-
-metrics:
-  gmv:
-    aliases: [GMV, 成交额, 销售额, 商品交易总额]
-    definition: 有效订单的商品金额之和（不含运费）
-    formula: "SUM(order_items.price)"
-    filters: [valid_order]
-  gmv_with_freight:
-    aliases: [含运费成交额]
-    formula: "SUM(order_items.price + order_items.freight_value)"
-    filters: [valid_order]
-  order_count:
-    aliases: [订单量, 订单数]
-    formula: "COUNT(DISTINCT orders.order_id)"
-    filters: [valid_order]
-  aov:
-    aliases: [客单价, 平均订单金额]
-    formula: "gmv / order_count"
-  buyer_count:
-    aliases: [买家数, 下单用户数]
-    formula: "COUNT(DISTINCT customers.customer_unique_id)"
-    filters: [valid_order]
-  repurchase_rate:
-    aliases: [复购率]
-    definition: 统计周期内下单 ≥2 次的用户占下单用户比例
-    formula: "COUNT(user WHERE orders>=2) / COUNT(user)"
-    grain: customers.customer_unique_id
-  delivery_days:
-    aliases: [履约时效, 配送时长]
-    formula: "AVG(order_delivered_customer_date - order_purchase_timestamp) 以天计"
-    filters: ["order_status = 'delivered'"]
-  late_delivery_rate:
-    aliases: [延迟交付率, 逾期率]
-    formula: "COUNT(order_delivered_customer_date > order_estimated_delivery_date) / COUNT(delivered)"
-  avg_review_score:
-    aliases: [平均评分, 好评度]
-    formula: "AVG(reviews.review_score)"
-  bad_review_rate:
-    aliases: [差评率]
-    formula: "COUNT(review_score <= 2) / COUNT(*)"
+  valid_order:
+    sql: "o.order_status NOT IN ('canceled', 'unavailable')"
+    rationale: "电商交易口径：剔除已取消与库存不可用订单，保留已付款处理中、已发货与已送达订单。若用户询问‘已完结/已签收成交额’，应切换为 delivered_order。"
+  delivered_order:
+    sql: "o.order_status = 'delivered' AND o.order_delivered_customer_date IS NOT NULL"
+    rationale: "履约与签收口径：仅统计实际送达买家手中的订单。"
 
 dimensions:
-  customer_state: { aliases: [州, 地区, 省份], column: customers.customer_state }
-  seller_state: { aliases: [卖家州], column: sellers.seller_state }
-  category: { aliases: [品类, 类目], column: category_translation.product_category_name_english }
-  payment_type: { aliases: [支付方式], column: payments.payment_type }
-  month: { aliases: [月份], expr: "DATE_TRUNC('month', orders.order_purchase_timestamp)" }
+  month:
+    aliases: [月份, 月度, 按月]
+    expression: "DATE_TRUNC('month', o.order_purchase_timestamp)::DATE"
+    required_tables: [orders]
+  quarter:
+    aliases: [季度, 按季]
+    expression: "DATE_TRUNC('quarter', o.order_purchase_timestamp)::DATE"
+    required_tables: [orders]
+  customer_state:
+    aliases: [州, 买家州, 地区, 省份, 客户地区]
+    expression: "c.customer_state"
+    required_tables: [orders, customers]
+    join_sql: "JOIN olist_clean.customers c ON o.customer_id = c.customer_id"
+  seller_state:
+    aliases: [卖家州, 发货州, 商家地区]
+    expression: "s.seller_state"
+    required_tables: [order_items, sellers]
+    join_sql: "JOIN olist_clean.sellers s ON oi.seller_id = s.seller_id"
+  category:
+    aliases: [品类, 商品品类, 类目, 一级类目]
+    expression: "p.category_en"
+    required_tables: [order_items, products]
+    join_sql: "JOIN olist_clean.products p ON oi.product_id = p.product_id"
+  payment_type:
+    aliases: [支付方式, 付款方式]
+    expression: "pay.payment_type"
+    required_tables: [payments]
+    join_sql: "JOIN olist_clean.payments pay ON o.order_id = pay.order_id"
+
+ambiguity_rules:
+  - term_triggers: [成交额, 销售额, GMV]
+    question: "请确认成交额统计口径："
+    options:
+      - id: gmv_default
+        label: "有效订单商品金额（不含运费，剔除取消/不可用订单）【默认】"
+        metric_id: gmv
+      - id: gmv_with_freight
+        label: "有效订单含运费总金额（商品价 + 运费）"
+        metric_id: gmv_with_freight
+      - id: delivered_gmv
+        label: "仅已送达（delivered）订单商品金额"
+        metric_id: delivered_gmv
+
+metrics:
+  - id: gmv
+    name: 有效商品成交额（不含运费）
+    aliases: [GMV, 商品成交额, 净商品销售额]
+    definition: 有效订单（非取消/不可用）中所有商品项 price 之和，不含运费。
+    grain: order_item
+    filters: [valid_order]
+    required_tables: [orders, order_items]
+    allowed_dimensions: [month, quarter, customer_state, seller_state, category]
+    incompatible_dimensions:
+      - dimension: payment_type
+        reason: "一单多商品与一单多支付直接 JOIN 会产生 M×N 笛卡尔积放大金额；按支付方式看金额请改用 payment_amount 指标。"
+    sql_template: |
+      SELECT
+        ROUND(COALESCE(SUM(oi.price), 0)::NUMERIC, 2) AS gmv
+      FROM olist_clean.orders o
+      JOIN olist_clean.order_items oi ON o.order_id = oi.order_id
+      WHERE o.order_status NOT IN ('canceled', 'unavailable')
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
+
+  - id: gmv_with_freight
+    name: 含运费总成交额
+    aliases: [含运费GMV, 订单总应收, 含运费成交额]
+    definition: 有效订单中商品价格与运费之和 SUM(price + freight_value)。
+    grain: order_item
+    filters: [valid_order]
+    required_tables: [orders, order_items]
+    allowed_dimensions: [month, quarter, customer_state, seller_state, category]
+    incompatible_dimensions:
+      - dimension: payment_type
+        reason: "order_items 与 payments 多对多关联会导致金额重复计算。"
+    sql_template: |
+      SELECT
+        ROUND(COALESCE(SUM(oi.price + oi.freight_value), 0)::NUMERIC, 2) AS gmv_with_freight
+      FROM olist_clean.orders o
+      JOIN olist_clean.order_items oi ON o.order_id = oi.order_id
+      WHERE o.order_status NOT IN ('canceled', 'unavailable')
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
+
+  - id: delivered_gmv
+    name: 已送达商品成交额
+    aliases: [签收GMV, 已完成成交额]
+    definition: 状态为 delivered 且有实际送达时间的订单商品金额之和。
+    grain: order_item
+    filters: [delivered_order]
+    required_tables: [orders, order_items]
+    allowed_dimensions: [month, quarter, customer_state, seller_state, category]
+    incompatible_dimensions:
+      - dimension: payment_type
+        reason: "order_items 与 payments 多对多关联会导致金额重复计算。"
+    sql_template: |
+      SELECT
+        ROUND(COALESCE(SUM(oi.price), 0)::NUMERIC, 2) AS delivered_gmv
+      FROM olist_clean.orders o
+      JOIN olist_clean.order_items oi ON o.order_id = oi.order_id
+      WHERE o.order_status = 'delivered'
+        AND o.order_delivered_customer_date IS NOT NULL
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
+
+  - id: payment_amount
+    name: 实际支付总额
+    aliases: [实付金额, 支付流水总额]
+    definition: 有效订单在 payments 表中的 payment_value 之和（用于按支付方式拆解）。
+    grain: payment
+    filters: [valid_order]
+    required_tables: [orders, payments]
+    allowed_dimensions: [month, quarter, customer_state, payment_type]
+    incompatible_dimensions:
+      - dimension: category
+        reason: "支付流水在订单粒度，无法无损拆分到多商品订单的单个品类。"
+      - dimension: seller_state
+        reason: "一单可能包含多个卖家的商品，支付流水无法直接归属单一卖家。"
+    sql_template: |
+      SELECT
+        ROUND(COALESCE(SUM(pay.payment_value), 0)::NUMERIC, 2) AS payment_amount
+      FROM olist_clean.orders o
+      JOIN olist_clean.payments pay ON o.order_id = pay.order_id
+      WHERE o.order_status NOT IN ('canceled', 'unavailable')
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
+
+  - id: order_count
+    name: 有效订单数
+    aliases: [订单量, 订单数, 单量]
+    definition: 满足 valid_order 且至少包含一条商品明细（与 GMV 分母口径对齐）的去重 order_id 数量。
+    grain: order
+    filters: [valid_order]
+    required_tables: [orders, order_items]
+    allowed_dimensions: [month, quarter, customer_state, seller_state, category, payment_type]
+    incompatible_dimensions: []
+    sql_template: |
+      SELECT
+        COUNT(DISTINCT o.order_id) AS order_count
+      FROM olist_clean.orders o
+      JOIN olist_clean.order_items oi ON o.order_id = oi.order_id
+      WHERE o.order_status NOT IN ('canceled', 'unavailable')
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
+
+  - id: aov
+    name: 客单价（平均每单商品金额）
+    aliases: [AOV, 客单价, 笔单价, 平均订单金额]
+    definition: 有效商品成交额（gmv）除以有商品明细的有效订单数（order_count）。
+    grain: order
+    filters: [valid_order]
+    required_tables: [orders, order_items]
+    allowed_dimensions: [month, quarter, customer_state]
+    incompatible_dimensions:
+      - dimension: category
+        reason: "跨品类订单按品类拆解时，COUNT(DISTINCT order_id) 分母不具备可加性；若看品类单价请使用品均价 SUM(price)/COUNT(*)。"
+      - dimension: payment_type
+        reason: "order_items 与 payments 直接关联会放大金额。"
+    sql_template: |
+      SELECT
+        ROUND(
+          (SUM(oi.price) / NULLIF(COUNT(DISTINCT o.order_id), 0))::NUMERIC,
+          2
+        ) AS aov
+      FROM olist_clean.orders o
+      JOIN olist_clean.order_items oi ON o.order_id = oi.order_id
+      WHERE o.order_status NOT IN ('canceled', 'unavailable')
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
+
+  - id: buyer_count
+    name: 下单买家数
+    aliases: [买家数, 下单用户数, 交易用户数]
+    definition: 有效订单对应的去重真实用户数 COUNT(DISTINCT customer_unique_id)。
+    grain: customer_unique
+    filters: [valid_order]
+    required_tables: [orders, customers]
+    allowed_dimensions: [month, quarter, customer_state]
+    incompatible_dimensions: []
+    sql_template: |
+      SELECT
+        COUNT(DISTINCT c.customer_unique_id) AS buyer_count
+      FROM olist_clean.orders o
+      JOIN olist_clean.customers c ON o.customer_id = c.customer_id
+      WHERE o.order_status NOT IN ('canceled', 'unavailable')
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
+
+  - id: repurchase_rate_90d
+    name: 首购后 90 天复购率
+    aliases: [复购率, 90天复购率, 二次购买率]
+    definition: 在指定首购周期内首次下有效单的真实用户（customer_unique_id）中，首单后 (0, 90] 天内再次产生不同有效订单的用户占比（注：为保证完整 90 天观察窗，首购截止日默认不晚于 2018-05-31；Olist 全盘复购率约 3%）。
+    grain: customer_unique
+    filters: [valid_order]
+    required_tables: [orders, customers]
+    allowed_dimensions: [quarter, customer_state]
+    incompatible_dimensions:
+      - dimension: category
+        reason: "用户跨品类复购需专门定义‘同品类复购’与‘跨品类复购’，不可直接按商品行聚合。"
+    sql_template: |
+      WITH user_orders AS (
+        SELECT
+          c.customer_unique_id,
+          o.order_id,
+          o.order_purchase_timestamp,
+          MIN(o.order_purchase_timestamp) OVER (PARTITION BY c.customer_unique_id) AS first_order_ts
+        FROM olist_clean.orders o
+        JOIN olist_clean.customers c ON o.customer_id = c.customer_id
+        WHERE o.order_status NOT IN ('canceled', 'unavailable')
+      ),
+      cohort_users AS (
+        SELECT
+          customer_unique_id,
+          MIN(first_order_ts) AS first_ts,
+          COUNT(DISTINCT CASE
+            WHEN order_purchase_timestamp > first_order_ts
+             AND order_purchase_timestamp <= first_order_ts + INTERVAL '90 days'
+            THEN order_id
+          END) AS repeat_orders_90d
+        FROM user_orders
+        GROUP BY customer_unique_id
+        HAVING MIN(first_order_ts) >= '2017-01-01'
+           AND MIN(first_order_ts) < '2018-06-01'
+      )
+      SELECT
+        COUNT(*) AS cohort_size,
+        COUNT(*) FILTER (WHERE repeat_orders_90d >= 1) AS repeat_buyers,
+        ROUND(
+          (COUNT(*) FILTER (WHERE repeat_orders_90d >= 1)::NUMERIC / NULLIF(COUNT(*), 0)) * 100,
+          2
+        ) AS repurchase_rate_90d_pct
+      FROM cohort_users
+
+  - id: delivery_days
+    name: 平均履约配送天数
+    aliases: [履约时效, 配送时长, 平均送达天数]
+    definition: 已送达订单从下单（order_purchase_timestamp）到实际签收（order_delivered_customer_date）的平均自然日天数。
+    grain: order
+    filters: [delivered_order]
+    required_tables: [orders]
+    allowed_dimensions: [month, quarter, customer_state, seller_state]
+    incompatible_dimensions:
+      - dimension: payment_type
+        reason: "配送时长为订单属性，关联多笔支付会导致订单重复计权。"
+    sql_template: |
+      SELECT
+        ROUND(
+          AVG(EXTRACT(EPOCH FROM (o.order_delivered_customer_date - o.order_purchase_timestamp)) / 86400.0)::NUMERIC,
+          2
+        ) AS delivery_days
+      FROM olist_clean.orders o
+      WHERE o.order_status = 'delivered'
+        AND o.order_delivered_customer_date IS NOT NULL
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
+
+  - id: late_delivery_rate
+    name: 延迟交付率（逾期率）
+    aliases: [延迟交付率, 逾期率, 超时送达率]
+    definition: 已送达订单中，实际送达时间晚于预计送达日期（order_delivered_customer_date > order_estimated_delivery_date）的订单占比（百分比）。
+    grain: order
+    filters: [delivered_order]
+    required_tables: [orders]
+    allowed_dimensions: [month, quarter, customer_state, seller_state]
+    incompatible_dimensions:
+      - dimension: payment_type
+        reason: "关联多笔支付会导致订单重复计数。"
+    sql_template: |
+      SELECT
+        ROUND(
+          (COUNT(*) FILTER (WHERE o.order_delivered_customer_date > o.order_estimated_delivery_date)::NUMERIC
+           / NULLIF(COUNT(*), 0)) * 100,
+          2
+        ) AS late_delivery_rate_pct
+      FROM olist_clean.orders o
+      WHERE o.order_status = 'delivered'
+        AND o.order_delivered_customer_date IS NOT NULL
+        AND o.order_estimated_delivery_date IS NOT NULL
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
+
+  - id: avg_review_score
+    name: 订单平均评分
+    aliases: [平均评分, 好评度, 客户满意度评分]
+    definition: 基于订单级去重评价表 olist_clean.reviews 计算的 review_score 均值（1~5 分）。
+    grain: order
+    filters: [valid_order]
+    required_tables: [orders, reviews]
+    allowed_dimensions: [month, quarter, customer_state, seller_state, category]
+    incompatible_dimensions: []
+    note: "若按 seller_state 或 category 聚合，需先将 order_items 按 (order_id, dimension) 去重后再关联 reviews，避免同单同品类多件商品重复计权。"
+    sql_template: |
+      SELECT
+        ROUND(AVG(r.review_score)::NUMERIC, 2) AS avg_review_score
+      FROM olist_clean.orders o
+      JOIN olist_clean.reviews r ON o.order_id = r.order_id
+      WHERE o.order_status NOT IN ('canceled', 'unavailable')
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
+
+  - id: bad_review_rate
+    name: 订单差评率
+    aliases: [差评率, 低分率, 负面评价率]
+    definition: 订单级去重评价中，review_score <= 2 的订单占已评价有效订单的百分比。
+    grain: order
+    filters: [valid_order]
+    required_tables: [orders, reviews]
+    allowed_dimensions: [month, quarter, customer_state, seller_state, category]
+    incompatible_dimensions: []
+    sql_template: |
+      SELECT
+        ROUND(
+          (COUNT(*) FILTER (WHERE r.review_score <= 2)::NUMERIC / NULLIF(COUNT(*), 0)) * 100,
+          2
+        ) AS bad_review_rate_pct
+      FROM olist_clean.orders o
+      JOIN olist_clean.reviews r ON o.order_id = r.order_id
+      WHERE o.order_status NOT IN ('canceled', 'unavailable')
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
 
 known_pitfalls:
-  - 一单多商品：order_items 与 payments 直接 JOIN 会导致金额重复放大，需先各自聚合到订单粒度。
-  - 2016 年及 2018-09 之后数据稀疏，趋势分析默认区间 2017-01 ~ 2018-08。
+  - id: fanout_items_payments
+    title: "订单商品与支付流水直接 JOIN 导致金额膨胀"
+    rule: "禁止在同一 SELECT 层级同时 JOIN order_items 与 payments 后直接 SUM；必须先在各自 CTE 聚合到 order_id 粒度。"
+  - id: customer_id_trap
+    title: "customer_id 并非唯一用户"
+    rule: "Olist 每笔订单生成新的 customer_id，统计买家数与复购率必须 JOIN customers 使用 customer_unique_id。"
+  - id: orders_without_items
+    title: "极少量有效状态订单在 order_items 中无明细（如 invoiced/processing 未落明细）"
+    rule: "计算客单价 AOV = GMV / order_count 时，分子分母均须基于关联 order_items 后的有效订单，保证口径自洽。"
+  - id: category_null_and_portuguese
+    title: "原始表商品品类为空或无英文映射"
+    rule: "一律查询 olist_clean.products.category_en，禁止用 INNER JOIN category_translation（会静默丢弃 ~620 个商品）。"
+  - id: sparse_tail_months
+    title: "首尾月份样本极度稀疏"
+    rule: "2016 年与 2018-09 之后数据不完整，计算环比/同比前必须校验月份完整性。"
