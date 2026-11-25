@@ -18,4 +18,4 @@
 
 ## 3. CI 流水线策略（S5 落地 `.github/workflows/ci.yml`）
 - 触发：`push` 与 `pull_request` 到 `main`。
-- 步骤：`ruff check` → `ruff format --check` → 口径字典 YAML 结构校验 → `pytest tests/unit tests/security -m "not integration"`（全程无需 `GEMINI_API_KEY` 与Kaggle 数据，2 分钟内完成）。
+- 步骤：`ruff check` → `ruff format --check` → 口径字典 YAML 结构校验 → `pytest tests/unit tests/security -m "not integration"`（全程无需 `DASHSCOPE_API_KEY` 与 Kaggle 数据，2 分钟内完成）。

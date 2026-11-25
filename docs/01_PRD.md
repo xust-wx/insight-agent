@@ -68,7 +68,7 @@
 ## 5. 安全与合规红线
 1. **多层数据库只读隔离**：数据库层 `default_transaction_read_only = on` + 最小 `SELECT` 授权 + `statement_timeout = 15s`；应用层 `sqlglot` 全 AST 遍历拦截任何 DML/DDL/可写 CTE/危险系统函数/多语句。
 2. **加固无网沙箱**：模型生成代码仅在 `--network none`、`--cap-drop ALL`、`--pids-limit`、非 root 用户的受限 Docker 沙箱中执行，宿主机严禁 `exec`/`eval`。
-3. **密钥与隐私保护**：API Key 仅存 `.env`；免费层 Gemini API 存在平台侧数据改进条款，因此**严禁接入任何真实企业私密数据**，仅使用公开 Olist 数据集。
+3. **密钥与数据合规保护**：`DASHSCOPE_API_KEY` 仅存本地 `.env`，禁止入库与打印日志；本项目全流程基于公开 Olist 数据集验证。
 4. **不可信输入隔离**：用户输入通过结构化字段传递，工具执行层实施确定性校验，不依赖 Prompt 劝导模型“自觉守规矩”。
 
 ## 6. 非目标（本期不做）

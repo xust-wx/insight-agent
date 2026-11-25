@@ -8,7 +8,7 @@
 flowchart LR
     U["用户 / Web UI"] -->|"REST + SSE"| API["FastAPI 网关"]
     API --> G["LangGraph 运行时"]
-    G -->|"统一 LLM 接口"| LLM["LLM 适配层 (Gemini 主 / OpenAI 兼容备)"]
+    G -->|"OpenAI 兼容协议 (国内直连)"| LLM["阿里云百炼 (qwen4-max + qwen3.7-text-embedding-flash)"]
     G -->|"MCP Client"| M["MCP Server: data-tools"]
     M --> SEM["混合语义检索 (口径 / Few-shot)"]
     M --> AST["sqlglot 全 AST 安全网关"]
@@ -23,8 +23,8 @@ flowchart LR
 | 层级 | 选型 | 理由与关键决策索引 |
 | :-- | :-- | :-- |
 | 语言与工程管理 | Python 3.13 + `venv` + `pyproject.toml` + `ruff` + `pytest` | 本机已装 3.13.15；统一 lint 与单测门禁 |
-| LLM 与适配层 | 主：`google-genai`（`gemini-3.8-flash` / `gemini-3.5-flash-lite`）<br>备：`openai` SDK（兼容 DeepSeek / Qwen） | 支持 `HTTPS_PROXY`；解决中国大陆地区限制与限流降级风险（`ADR-001`） |
-| Embedding | 主：`gemini-embedding-2`（768 维截断/原生维度配置）<br>备：本地轻量或兼容 API | 仅用于口径字典、Few-shot SQL 与干扰表实验（`ADR-004`） |
+| LLM 与推理控制 | `openai` SDK → 阿里云百炼 `qwen4-max`（`/compatible-mode/v1`） | 国内直连免代理；支持按节点调节 `reasoning_effort`（`low`/`high`）兼顾速度与深度（`ADR-001`） |
+| Embedding | `qwen3.7-text-embedding-flash`（`dimensions=1024`, `encoding_format="float"`） | 同源百炼 Key 驱动；`pgvector` 统一建 `vector(1024)` 索引（`ADR-001`, `ADR-004`） |
 | 编排与状态持久化 | LangGraph + `langgraph-checkpoint-postgres` | 原生支持 `interrupt`/`Command(resume=...)` 与断点恢复（`ADR-003`, `ADR-005`） |
 | 工具协议 | MCP Python SDK（`stdio` 本地进程 / `streamable-http`） | 工具契约标准化，便于独立单测与外部客户端复用 |
 | 数据库 | PostgreSQL 16 + `pgvector`（Docker 镜像 `pgvector/pgvector:pg16`） | 同时承载业务只读库（`olist_raw` / `olist_clean`）与状态库（`agent_state`） |
@@ -52,8 +52,8 @@ insight-agent/
 │   ├── validate_glossary.py     # 自动执行口径字典中全部 sql_template
 │   └── run_eval.py              # S4 断点续跑评测脚本
 ├── src/insight_agent/
-│   ├── config.py                # Pydantic Settings（含代理、模型、超时、预算配置）
-│   ├── llm/                     # LLMProvider 协议：GeminiProvider / OpenAICompatProvider / 重试限流
+│   ├── config.py                # Pydantic Settings（含百炼直连旁路代理、模型、超时、预算配置）
+│   ├── llm/                     # OpenAI 兼容客户端封装（qwen4-max 推理档位控制 + float Embedding + 退避重试）
 │   ├── semantic/                # 核心 Schema 摘要生成 + 口径/Few-shot 混合检索（BM25 + 向量）
 │   ├── security/                # sql_guard.py (sqlglot 全树校验)、prompt_guard.py
 │   ├── mcp_server/              # data-tools MCP Server 实现
@@ -188,20 +188,22 @@ stateDiagram-v2
 | `GET /api/v1/memory` / `DELETE /api/v1/memory/{id}` | 查看与清理已记住的业务口径偏好 |
 | `GET /api/v1/health` | 检查 DB 只读连接、沙箱容器状态与 LLM 配置状态 |
 
-## 10. API 配额与调用量容量规划（Gemini 免费层 / 低成本预算）
+## 10. API 配额与调用量容量规划（百炼 `qwen4-max` 预算控制）
 
-| 阶段 / 场景 | 预估 LLM 请求数 | 预估总 Token 量 | 限流防护策略 |
+| 阶段 / 场景 | 预估 LLM 请求数 | 预估总 Token 量（含思考链） | 成本与限流控制策略 |
 | :-- | :-- | :-- | :-- |
-| 日常单题交互（简单查询） | 2 ~ 3 次 / 题 | ~5K tokens | `gemini-3.5-flash-lite` 处理轻量节点 |
-| 日常单题交互（多步拆解） | 5 ~ 8 次 / 题 | ~22K tokens | 常驻 Schema 利用隐式/显式 Prompt Caching |
-| S4 全量评测（45 题 × 3 版本 + Judge） | ~750 次 | ~2.5M tokens | 评测器内置**逐题落盘断点续跑 + RPM 令牌桶限速（如 10 RPM）+ 指数退避**；若触发日配额上限（RPD），支持无缝切至按量计费（约 \$1~2）或 DeepSeek API 完成跑分 |
+| 日常单题交互（简单查询） | 2 ~ 3 次 / 题 | ~5K tokens | 轻量节点强制设 `reasoning_effort="low"`，避免简单查数空转长思维链 |
+| 日常单题交互（多步拆解） | 5 ~ 8 次 / 题 | ~22K tokens | 仅 `Plan` / 深度自修复 / `Synthesize` 开 `reasoning_effort="high"`，并设 `max_completion_tokens` 上限 |
+| S1/S4 向量索引构建 | < 50 次批量请求 | ~80K tokens | `qwen3.7-text-embedding-flash` 批量嵌入（单次上限高、耗时极短），显式传 `encoding_format="float"` |
+| S4 全量评测（45 题 × 3 版本 + Judge） | ~750 次 | ~2.5M tokens | 评测器内置**逐题落盘断点续跑 + 并发信号量限速 + 429 指数退避**；Trace 单独记录 `reasoning_tokens` 占比 |
 
 ## 11. 风险登记册与应对预案
 
 | 编号 | 风险描述 | 影响 | 对策 |
 | :-- | :-- | :-- | :-- |
-| R-1 | **Gemini API 中国大陆地区封锁（`FAILED_PRECONDITION: User location is not supported`）** | 阻塞全部 LLM 调用 | 1. `config.py` 原生读取 `HTTPS_PROXY`；<br>2. S1 第一步跑 `smoke_test_llm.py` 验证出口地区；<br>3. 内置 `OpenAICompatProvider` 随时可切 DeepSeek / Qwen |
-| R-2 | Gemini 免费层 RPM/RPD 限流及平台数据改进隐私条款 | 评测中断 / 隐私风险 | 令牌桶限速 + 指数退避 + 断点续跑；严格只用公开 Olist 数据，禁入私密数据 |
-| R-3 | Olist 脏数据（评价重复、品类缺失、列名拼写、邮编重复）导致算错 | 指标失真 | S1 建立 `olist_clean` 标准化层并在口径字典声明兼容矩阵 |
-| R-4 | Windows 下 Docker Desktop 挂载 `D:` 盘权限或路径格式异常 | 沙箱读不到 CSV | 统一通过容器内固定路径 `/workspace/...` 传递相对路径，宿主机不向沙箱传盘符路径；S2 优先联调 |
-| R-5 | Olist 无流量/促销数据导致模型“强行编造因果原因” | 面试与专业度失分 | Prompt 强约束 + 报告模板自动附加“贡献拆解 ≠ 因果推断”边界声明 |
+| R-1 | **本机开启系统代理（`127.0.0.1:7890`）导致国内百炼 API 误走海外节点变慢或断连** | 请求高延迟或连接重置 | DashScope 客户端显式设置 `httpx.AsyncClient(trust_env=False)` 并配置 `NO_PROXY=dashscope.aliyuncs.com`，强制国内直连（`ADR-001`） |
+| R-2 | **`openai` SDK 默认发送 `base64` 向量格式导致百炼 Embedding 报错** | 向量入库/检索失败 | Embedding 封装层硬编码 `encoding_format="float"` 与 `dimensions=1024`，纳入 S1 冒烟与单测 |
+| R-3 | `qwen4-max` 思考链过长导致简单查询延迟偏高或 Token 超支 | 延迟与费用上升 | 按节点分级设置 `reasoning_effort`（`low` vs `high`）与 `max_completion_tokens` |
+| R-4 | Olist 脏数据（评价重复、品类缺失、列名拼写、邮编重复）导致算错 | 指标失真 | S1 建立 `olist_clean` 标准化层并在口径字典声明兼容矩阵 |
+| R-5 | Windows 下 Docker Desktop 挂载 `D:` 盘权限或路径格式异常 | 沙箱读不到 CSV | 统一通过容器内固定路径 `/workspace/...` 传递相对路径，宿主机不向沙箱传盘符路径；S2 优先联调 |
+| R-6 | Olist 无流量/促销数据导致模型“强行编造因果原因” | 面试与专业度失分 | Prompt 强约束 + 报告模板自动附加“贡献拆解 ≠ 因果推断”边界声明 |

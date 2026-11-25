@@ -32,7 +32,7 @@
 
 ### S1 数据底座、EDA 与语义层
 - 内容：
-  1. **入口冒烟检查**：运行 `scripts/smoke_test_llm.py` 验证代理、API 地区可用性与默认模型列表（若 Gemini 受限则验证备选 OpenAI 兼容端点）。
+  1. **入口冒烟检查**：运行 `scripts/smoke_test_llm.py` 验证百炼 `DASHSCOPE_API_KEY`、`qwen4-max` 与 `qwen3.7-text-embedding-flash`（`1024` 维 float 向量）直连连通性。
   2. Docker 拉起 PostgreSQL 16 + `pgvector`（仅绑定 `127.0.0.1`）；导入 Olist 公开数据集（9 表），校验 SHA256 与行数，创建标准化分析视图（修复拼写、去重评价、品类兜底）。
   3. 创建严格只读账号（`default_transaction_read_only = on` + 超时限制）。
   4. 运行 `scripts/validate_glossary.py`，逐条执行口径字典中的 `sql_template`，确保 100% 可执行且无语法/关联错误。

@@ -1,5 +1,9 @@
 # Changelog
 
+## [s0-v0.3] - 2026-11-25
+### Changed
+- **模型栈定型 (`ADR-001`, `02_TDD.md`, `.env.example`, `README.md`)**：主生成模型定为阿里云百炼 `qwen4-max`（支持按节点分级控制 `reasoning_effort`），向量嵌入模型定为 `qwen3.7-text-embedding-flash`（`1024` 维，显式指定 `encoding_format="float"` 规避 SDK `base64` 兼容陷阱）；配置国内直连旁路本地系统代理，从根源消除海外 API 地区封锁风险。
+
 ## [s0-v0.2] - 2026-11-24
 ### Changed
 - **PRD v0.2 (`docs/01_PRD.md`)**：将“业务归因”严格界定为“定量贡献度拆解（Contribution Decomposition）”并增加非因果免责声明；明确定义 `v0-baseline`、分档延迟 SLA、Token 预算上限与数字溯源幻觉率自动检测口径；修正 HITL 触发条件为口径歧义与稀疏区间确认。
