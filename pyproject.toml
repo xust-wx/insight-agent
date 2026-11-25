@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "insight-agent"
+version = "0.1.0"
+description = "Autonomous data analysis and quantitative contribution decomposition Agent"
+readme = "README.md"
+requires-python = ">=3.13"
+license = { file = "LICENSE" }
+dependencies = [
+    "httpx>=0.28.0",
+    "jieba>=0.42.1",
+    "openai>=1.65.0",
+    "pandas>=2.2.3",
+    "psycopg[binary]>=3.2.4",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "pyyaml>=6.0.2",
+    "sqlglot>=26.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "kagglehub>=0.3.8",
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.3",
+    "ruff>=0.9.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/insight_agent"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not integration and not llm'"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: tests requiring local Docker PostgreSQL or sandbox",
+    "llm: tests requiring live DashScope API key",
+]

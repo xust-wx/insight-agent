@@ -1,0 +1,99 @@
+# Verified Few-Shot SQL Examples for Semantic Retrieval
+# All queries in this file are automatically executed and verified by `scripts/validate_glossary.py`.
+# Derived from Olist public dataset schema (CC BY-NC-SA 4.0).
+
+version: "0.2"
+examples:
+  - key: "few_shot:monthly_gmv_orders_aov"
+    title: "按月统计有效订单量、成交额 GMV 与客单价 AOV 趋势"
+    question: "2017-01 至 2018-08 每月有效订单量、GMV 与客单价（AOV）变化趋势？"
+    sql: |
+      SELECT
+        DATE_TRUNC('month', o.order_purchase_timestamp)::DATE AS month,
+        COUNT(DISTINCT o.order_id) AS order_count,
+        ROUND(SUM(oi.price)::NUMERIC, 2) AS gmv,
+        ROUND((SUM(oi.price) / NULLIF(COUNT(DISTINCT o.order_id), 0))::NUMERIC, 2) AS aov
+      FROM olist_clean.orders o
+      JOIN olist_clean.order_items oi ON o.order_id = oi.order_id
+      WHERE o.order_status NOT IN ('canceled', 'unavailable')
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
+      GROUP BY 1
+      ORDER BY 1
+
+  - key: "few_shot:gmv_by_category_mom"
+    title: "按商品品类对比两个月份的成交额 GMV 变化（维度贡献拆解底表）"
+    question: "对比 2017-11 与 2017-10 各商品品类 GMV 变化，正负贡献最大的品类有哪些？"
+    sql: |
+      WITH cat_mom AS (
+        SELECT
+          p.category_en,
+          ROUND(COALESCE(SUM(oi.price) FILTER (WHERE DATE_TRUNC('month', o.order_purchase_timestamp) = '2017-10-01'), 0)::NUMERIC, 2) AS base_gmv,
+          ROUND(COALESCE(SUM(oi.price) FILTER (WHERE DATE_TRUNC('month', o.order_purchase_timestamp) = '2017-11-01'), 0)::NUMERIC, 2) AS curr_gmv
+        FROM olist_clean.orders o
+        JOIN olist_clean.order_items oi ON o.order_id = oi.order_id
+        JOIN olist_clean.products p ON oi.product_id = p.product_id
+        WHERE o.order_status NOT IN ('canceled', 'unavailable')
+          AND o.order_purchase_timestamp >= '2017-10-01'
+          AND o.order_purchase_timestamp < '2017-12-01'
+        GROUP BY 1
+      )
+      SELECT
+        category_en,
+        base_gmv,
+        curr_gmv,
+        (curr_gmv - base_gmv) AS delta_gmv
+      FROM cat_mom
+      ORDER BY delta_gmv DESC
+
+  - key: "few_shot:late_delivery_vs_bad_review"
+    title: "延迟交付（逾期）与差评率相关性对比（自然日口径）"
+    question: "已送达订单中，逾期送达与准时送达的订单平均评分及差评率（评分≤2）对比？"
+    sql: |
+      SELECT
+        CASE
+          WHEN o.order_delivered_customer_date::DATE > o.order_estimated_delivery_date::DATE THEN 'late_delivered'
+          ELSE 'on_time_delivered'
+        END AS delivery_status,
+        COUNT(*) AS order_count,
+        ROUND(AVG(r.review_score)::NUMERIC, 2) AS avg_review_score,
+        ROUND((COUNT(*) FILTER (WHERE r.review_score <= 2)::NUMERIC / NULLIF(COUNT(*), 0)) * 100, 2) AS bad_review_rate_pct
+      FROM olist_clean.orders o
+      JOIN olist_clean.reviews r ON o.order_id = r.order_id
+      WHERE o.order_status = 'delivered'
+        AND o.order_delivered_customer_date IS NOT NULL
+        AND o.order_estimated_delivery_date IS NOT NULL
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
+      GROUP BY 1
+      ORDER BY 1
+
+  - key: "few_shot:late_rate_by_seller_state_dedup"
+    title: "按卖家州统计逾期率（一单多品先按订单+卖家州去重）"
+    question: "2017-01 至 2018-08 哪些卖家州（seller_state）延迟交付率最高？"
+    sql: |
+      WITH order_seller_states AS (
+        SELECT DISTINCT
+          oi.order_id,
+          s.seller_state
+        FROM olist_clean.order_items oi
+        JOIN olist_clean.sellers s ON oi.seller_id = s.seller_id
+      )
+      SELECT
+        oss.seller_state,
+        COUNT(*) AS delivered_orders,
+        ROUND(
+          (COUNT(*) FILTER (WHERE o.order_delivered_customer_date::DATE > o.order_estimated_delivery_date::DATE)::NUMERIC
+           / NULLIF(COUNT(*), 0)) * 100,
+          2
+        ) AS late_delivery_rate_pct
+      FROM olist_clean.orders o
+      JOIN order_seller_states oss ON o.order_id = oss.order_id
+      WHERE o.order_status = 'delivered'
+        AND o.order_delivered_customer_date IS NOT NULL
+        AND o.order_estimated_delivery_date IS NOT NULL
+        AND o.order_purchase_timestamp >= '2017-01-01'
+        AND o.order_purchase_timestamp < '2018-09-01'
+      GROUP BY 1
+      HAVING COUNT(*) >= 50
+      ORDER BY late_delivery_rate_pct DESC

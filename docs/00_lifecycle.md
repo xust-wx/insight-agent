@@ -7,8 +7,8 @@
 
 | 阶段 | 名称 | 预估工期 | 负责人 | 状态 | 关键产出文档 | 完成日期 |
 | :-- | :-- | :-- | :-- | :-- | :-- | :-- |
-| S0 | 需求对齐与技术设计 | 1.5 人天 | 架构/研发 | ✅ v0.2 修订完成（API 连通性待 S1 入口验证） | `01_PRD.md` `02_TDD.md` `03_metrics_glossary.yaml` `test_plan.md` `security_cases.md` `adr/ADR-001~006` | 2026-11-24 |
-| S1 | 数据底座、EDA 与语义层 | 2.0 人天 | 数据/研发 | ⏳ 未开始 | `04_data_setup.md` `eda_findings.md` `stage_reports/S1.md` | |
+| S0 | 需求对齐与技术设计 | 1.5 人天 | 架构/研发 | ✅ v0.3 定型完成（`s0-v0.3`） | `01_PRD.md` `02_TDD.md` `03_metrics_glossary.yaml` `test_plan.md` `security_cases.md` `adr/ADR-001~006` | 2026-11-25 |
+| S1 | 数据底座、EDA 与语义层 | 2.0 人天 | 数据/研发 | ✅ 已完成（所有门禁全绿） | `04_data_setup.md` `eda_findings.md` `stage_reports/S1.md` | 2026-11-25 |
 | S2 | MVP 骨架与主链路联调 | 2.5 人天 | 研发 | ⏳ 未开始 | `05_api_contract.md` `stage_reports/S2.md` | |
 | S3 | 核心 Agent 能力深化 | 3.5 人天 | 研发 | ⏳ 未开始 | `stage_reports/S3.md` | |
 | S4 | 评测体系与数据驱动优化 | 3.0 人天 | 研发/评测 | ⏳ 未开始 | `06_eval_report.md` `stage_reports/S4.md` | |
@@ -19,7 +19,8 @@
 
 | 阶段 | 评审版本 | 评审结论 | 评审报告 | 修订闭环版本 |
 | :-- | :-- | :-- | :-- | :-- |
-| S0 | v0.1 (`s0-done`) | 有条件通过（4 项 P0、7 项 P1、11 项 P2） | `stage_reports/S0_review.md` | v0.2（当前版本，待推送并打 `s0-v0.2` 标签；S1 入口完成 API 实测后归档） |
+| S0 | v0.1 (`s0-done`) | 有条件通过（4 项 P0、7 项 P1、11 项 P2） | `stage_reports/S0_review.md` | v0.3（`s0-v0.3` 已归档） |
+| S1 | v1.0 | 有条件通过（3 项 P0、6 项 P1、7 项 P2） | `stage_reports/S1_review.md` | v1.1（全部 P0/P1/P2 已闭环验收） |
 
 ## 阶段定义与门禁（Definition of Done）
 

@@ -11,7 +11,7 @@ timezone_policy: "TIMESTAMP WITHOUT TIME ZONE（保持 Olist 原始巴西圣保�
 recommended_analysis_window:
   start: "2017-01-01"
   end: "2018-08-31"
-  sparse_periods_note: "2016-09~2016-12 处于起步期样本极少；2018-09~2018-10 几乎仅有少量订单，趋势与环比分析默认排除并在命中时触发提醒。"
+  sparse_periods_note: "2016-09~2016-12 处于起步期样本极少；2018-09~2018-10 几乎仅有少量未完结订单，趋势与环比分析默认排除并在命中时触发提醒。此外 2018-08 存在轻微右删失（已送达占比 97.53%，往期约 98.9%），解读末月履约/评价指标时需附带说明。"
 
 tables:
   orders:
@@ -270,7 +270,7 @@ metrics:
   - id: repurchase_rate_90d
     name: 首购后 90 天复购率
     aliases: [复购率, 90天复购率, 二次购买率]
-    definition: 在指定首购周期内首次下有效单的真实用户（customer_unique_id）中，首单后 (0, 90] 天内再次产生不同有效订单的用户占比（注：为保证完整 90 天观察窗，首购截止日默认不晚于 2018-05-31；Olist 全盘复购率约 3%）。
+    definition: 在指定首购周期内首次下有效单的真实用户（customer_unique_id）中，首单后 (0, 90] 天内再次产生不同有效订单的用户占比（注：为保证完整 90 天观察窗，首购截止日默认不晚于 2018-05-31；Olist 实测 90 天复购率约 2.03%）。
     grain: customer_unique
     filters: [valid_order]
     required_tables: [orders, customers]
@@ -320,6 +320,7 @@ metrics:
     filters: [delivered_order]
     required_tables: [orders]
     allowed_dimensions: [month, quarter, customer_state, seller_state]
+    note: "若按 seller_state 聚合，需先将 order_items 按 (order_id, seller_id) 关联 sellers 并按 (order_id, seller_state) 去重后再聚合，避免一单多品重复计权。"
     incompatible_dimensions:
       - dimension: payment_type
         reason: "配送时长为订单属性，关联多笔支付会导致订单重复计权。"
@@ -338,18 +339,19 @@ metrics:
   - id: late_delivery_rate
     name: 延迟交付率（逾期率）
     aliases: [延迟交付率, 逾期率, 超时送达率]
-    definition: 已送达订单中，实际送达时间晚于预计送达日期（order_delivered_customer_date > order_estimated_delivery_date）的订单占比（百分比）。
+    definition: 已送达订单中，实际送达自然日（::DATE）晚于预计送达自然日（order_delivered_customer_date::DATE > order_estimated_delivery_date::DATE）的订单占比（注：预计送达字段时间部分恒为 00:00:00，必须按日期比较以免将当日送达误判为逾期）。
     grain: order
     filters: [delivered_order]
     required_tables: [orders]
     allowed_dimensions: [month, quarter, customer_state, seller_state]
+    note: "若按 seller_state 聚合，需先将 order_items 按 (order_id, seller_id) 关联 sellers 并按 (order_id, seller_state) 去重后再聚合，避免一单多品重复计权。"
     incompatible_dimensions:
       - dimension: payment_type
         reason: "关联多笔支付会导致订单重复计数。"
     sql_template: |
       SELECT
         ROUND(
-          (COUNT(*) FILTER (WHERE o.order_delivered_customer_date > o.order_estimated_delivery_date)::NUMERIC
+          (COUNT(*) FILTER (WHERE o.order_delivered_customer_date::DATE > o.order_estimated_delivery_date::DATE)::NUMERIC
            / NULLIF(COUNT(*), 0)) * 100,
           2
         ) AS late_delivery_rate_pct
@@ -416,3 +418,6 @@ known_pitfalls:
   - id: sparse_tail_months
     title: "首尾月份样本极度稀疏"
     rule: "2016 年与 2018-09 之后数据不完整，计算环比/同比前必须校验月份完整性。"
+  - id: estimated_date_is_date_only
+    title: "预计送达字段时间部分恒为 00:00:00"
+    rule: "判断订单逾期必须使用 order_delivered_customer_date::DATE > order_estimated_delivery_date::DATE 按自然日比较，禁止直接比较时间戳（否则会将预计当日送达的 1,291 笔订单误判为逾期）。"

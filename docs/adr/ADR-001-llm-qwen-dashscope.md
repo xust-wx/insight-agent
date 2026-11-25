@@ -31,3 +31,8 @@
 ## 后果
 - **正面**：彻底根除地区封锁风险，国内直连低延迟，中文业务术语与口径理解能力更强，单一 `openai` SDK 即可同时驱动对话与 Embedding（减少额外 SDK 依赖）。
 - **需注意**：`qwen4-max` 开启深度推理时会消耗思维链（Thinking）Token，需在 `max_completion_tokens` 与 Trace 日志中单独统计 `reasoning_tokens`，防止单题预算超支。
+
+## S1 实测验证记录（2026-11-25）
+- 验证脚本：`scripts/smoke_test_llm.py`（`httpx.Client(trust_env=False)` 国内直连旁路系统代理）。
+- **主模型实测**：`model="qwen4-max"` 传入 `reasoning_effort="low"` 返回 `200 OK`（端到端耗时 `1504 ms`），响应 `usage.completion_tokens_details.reasoning_tokens = 17`，证实百炼兼容接口原生支持 `reasoning_effort` 分档控制并返回独立思考 Token 计数。
+- **向量模型实测**：`model="qwen3.7-text-embedding-flash"` 显式传入 `encoding_format="float"`、`dimensions=1024` 返回 `200 OK`（双句批量耗时 `166 ms`），实测输出标准 1024 维浮点数组。

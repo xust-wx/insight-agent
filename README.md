@@ -2,7 +2,7 @@
 
 基于 **Qwen4-Max + Qwen3.7-Text-Embedding-Flash + LangGraph + MCP + 加固 Docker 沙箱** 的生产级数据分析 Agent：用自然语言提问，自动对齐指标口径、规划多步拆解、经 AST 安全网关只读取数、在无网隔离沙箱中调用确定性统计库完成贡献拆解（加法贡献 / LMDI / PVM 结构效应），输出每个数字均可溯源的分析报告。
 
-> 当前进度：**S0 需求对齐与技术设计 v0.3（已定型 Qwen4-Max + Qwen3.7 Embedding 模型栈）** —— 见 [docs/00_lifecycle.md](docs/00_lifecycle.md)
+> 当前进度：**S1 数据底座、EDA 与语义层已完成（全部门禁全绿，准备进入 S2 MVP 骨架联调）** —— 见 [docs/00_lifecycle.md](docs/00_lifecycle.md) 与 [docs/stage_reports/S1.md](docs/stage_reports/S1.md)
 
 ## 文档导航
 
